@@ -1,0 +1,158 @@
+import pandas as pd  
+import numpy as np  
+import matplotlib.pyplot as plt  
+import seaborn as sns  
+from sklearn.model_selection import train_test_split, GridSearchCV  
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier  
+from sklearn.linear_model import LogisticRegression  
+from sklearn.svm import SVC  
+from sklearn.metrics import (accuracy_score, f1_score, roc_auc_score,  
+                             recall_score, confusion_matrix, roc_curve)  
+from sklearn.preprocessing import StandardScaler  
+
+def plot_confusion_matrix(cm, model_name, ax):  
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', ax=ax, cbar=False)  
+    ax.set_xlabel('Predicted', fontsize=12, fontweight='bold')  
+    ax.set_ylabel('Actual', fontsize=12, fontweight='bold')  
+    ax.set_title(f'Confusion Matrix: {model_name}', fontsize=14, fontweight='bold')  
+    ax.xaxis.set_ticklabels(['Negative', 'Positive'])  
+    ax.yaxis.set_ticklabels(['Negative', 'Positive'])  
+
+def plot_roc_curves(results, X_test, y_test):  
+    plt.figure(figsize=(12, 10))  
+    for model_name, metrics in results.items():  
+        model = metrics['model']  
+        y_pred_proba = model.predict_proba(X_test)[:, 1]  
+        fpr, tpr, _ = roc_curve(y_test, y_pred_proba)  
+        auc = roc_auc_score(y_test, y_pred_proba)  
+        plt.plot(fpr, tpr, label=f'{model_name} (AUC = {auc:.2f})', linewidth=2)  
+
+    plt.plot([0, 1], [0, 1], linestyle='--', color='gray', label='Random', linewidth=2)  
+    plt.xlabel('False Positive Rate', fontsize=14, fontweight='bold')  
+    plt.ylabel('True Positive Rate', fontsize=14, fontweight='bold')  
+    plt.title('Receiver Operating Characteristic (ROC) Curve', fontsize=18, fontweight='bold')  
+    plt.legend(loc="lower right", fontsize=12)  
+    plt.grid(True, linestyle='--', alpha=0.7)  
+    plt.xticks(fontsize=12)  
+    plt.yticks(fontsize=12)  
+    plt.tight_layout()  
+    plt.savefig('ROC_curves.png', dpi=300, bbox_inches='tight')  
+    plt.close()  
+
+if __name__ == '__main__':  
+    print("Starting to read data...")  
+    data = pd.read_excel('Antitumor_Training_Set.xlsx')  
+    print("Data reading completed")  
+
+    features = data.iloc[:, 1:-1]  
+    labels = data.iloc[:, -1]  
+
+    scaler = StandardScaler()  
+    features_scaled = scaler.fit_transform(features)  
+
+    X_train, X_test, y_train, y_test = train_test_split(features_scaled, labels, test_size=0.2, random_state=42)  
+
+    model_params = {  
+        'Random Forest': {  
+            'model': RandomForestClassifier(random_state=42),  
+            'params': {'n_estimators': [50, 100, 200]}  
+        },  
+        'Gradient Boosting': {  
+            'model': GradientBoostingClassifier(random_state=42),  
+            'params': {'n_estimators': [50, 100, 200], 'learning_rate': [0.01, 0.1, 0.5]}  
+        },  
+        'Logistic Regression': {  
+            'model': LogisticRegression(max_iter=1000, random_state=42),  
+            'params': {'C': [0.1, 1, 10]}  
+        },  
+        'Support Vector Machine': {  
+            'model': SVC(probability=True, random_state=42),  
+            'params': {'C': [0.1, 1, 10], 'kernel': ['linear', 'rbf']}  
+        }  
+    }  
+
+    results = {}  
+    performance_data = []  
+
+    # Train models and evaluate performance  
+    for model_name, mp in model_params.items():  
+        print(f"Training {model_name} model...")  
+        grid_search = GridSearchCV(mp['model'], mp['params'], cv=5, n_jobs=-1, scoring='accuracy')  
+        grid_search.fit(X_train, y_train)  
+
+        best_clf = grid_search.best_estimator_  
+        y_pred = best_clf.predict(X_test)  
+
+        # Calculate performance metrics  
+        accuracy = accuracy_score(y_test, y_pred)  
+        f1 = f1_score(y_test, y_pred, average='weighted')  
+        auc = roc_auc_score(y_test, best_clf.predict_proba(X_test)[:, 1])  
+        sensitivity = recall_score(y_test, y_pred)  
+
+        results[model_name] = {  
+            "best_params": grid_search.best_params_,  
+            "model": best_clf,  
+            "accuracy": accuracy,  
+            "f1_score": f1,  
+            "auc": auc,  
+            "sensitivity": sensitivity,}  
+
+        performance_data.append({  
+            "Model": model_name,  
+            "Accuracy": accuracy,  
+            "F1 Score": f1,  
+            "AUC": auc,  
+            "Sensitivity": sensitivity,  
+        })  
+
+    # Output performance metrics to Excel  
+    performance_df = pd.DataFrame(performance_data)  
+    performance_df.to_excel("Model_Performance_Metrics.xlsx", index=False)  
+
+    # Plot heatmap of confusion matrices  
+    fig, axes = plt.subplots(2, 2, figsize=(20, 20))  
+    axes = axes.flatten()  
+
+    for idx, (model_name, metrics) in enumerate(results.items()):  
+        cm = confusion_matrix(y_test, metrics['model'].predict(X_test))  
+        plot_confusion_matrix(cm, model_name, axes[idx])  
+
+    plt.tight_layout()  
+    plt.savefig('Confusion_Matrices_Heatmap.png', dpi=300, bbox_inches='tight')  
+    plt.close()  
+
+    # Plot ROC curves  
+    plot_roc_curves(results, X_test, y_test)  
+
+    # Prediction part  
+    print("Starting prediction on 'Lingzhi' data...")  
+
+    # Read prediction data  
+    predict_data = pd.read_excel('FDA_Approved_Drug_Morgan_Fingerprint.xlsx')  
+    predict_features = predict_data.iloc[:, 1:]  
+    predict_features_scaled = scaler.transform(predict_features)  
+
+    # Save predictions for all models  
+    all_predictions = []  
+
+    for model_name, metrics in results.items():  
+        model = metrics['model']  
+        predict_probabilities = model.predict_proba(predict_features_scaled)[:, 1]  
+
+        # Store results in DataFrame  
+        df_predictions = pd.DataFrame({  
+            'Model': model_name,  
+            'Prediction_Probability': predict_probabilities  
+        })  
+        all_predictions.append(df_predictions)  
+
+    # Combine predictions from all models  
+    final_predictions = pd.concat(all_predictions, ignore_index=True)  
+
+    # Save prediction results to Excel  
+    final_predictions.to_excel('All_Models_Prediction_Results_FDA.xlsx', index=False)  
+
+    print("Model performance metrics saved to 'Model_Performance_Metrics.xlsx'.")  
+    print("All model prediction results saved to 'All_Models_Prediction_Results_FDA.xlsx'.")  
+    print("Confusion matrices heatmap saved as 'Confusion_Matrices_Heatmap.png'.")  
+    print("ROC curves saved as 'ROC_curves.png'.")
